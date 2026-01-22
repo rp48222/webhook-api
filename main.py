@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body, HTTPException, Request
+from fastapi import FastAPI, Body, HTTPException, Request, BackgroundTasks
 from datetime import datetime
 import uuid
 import httpx
@@ -178,7 +178,13 @@ async def list_deliveries(request: Request, limit: int = 20):
 
 
 @app.post("/v1/ingest/{source}")
-async def ingest_webhook(source: str, request: Request, payload: dict = Body(...)):
+async def ingest_webhook(
+    source: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: dict = Body(...)
+):
+
     user_id = get_user_id(request)
     ensure_user(user_id)
 
@@ -219,26 +225,19 @@ async def ingest_webhook(source: str, request: Request, payload: dict = Body(...
     create_delivery(delivery)
 
     # Forward once (retries coming next)
-   # Forward with retries
-    destination_status = await attempt_delivery(delivery_id, destination_url, event)
+   # Run delivery + retries in the background (do not block the response)
+    background_tasks.add_task(attempt_delivery, delivery_id, destination_url, event)
+    destination_status = None
 
-    if destination_status is None:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": "Delivery failed after retries.",
-                "delivery_id": delivery_id,
-                "hint": "Call GET /v1/deliveries/{delivery_id} to see attempts and last_error."
-            }
-        )
 
 
 
     return {
-        "status": "forwarded",
+        "status": "accepted",
         "delivery_id": delivery_id,
         "user_id": user_id,
         "destination_url": destination_url,
         "destination_status": destination_status,
         "event": event
     }
+
